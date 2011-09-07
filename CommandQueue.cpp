@@ -66,7 +66,7 @@ CommandQueue::CommandQueue(vector< vector<BankState> > &states) :
 	}
 
 	//vector of counters used to ensure rows don't stay open too long
-	rowAccessCounters = vector< vector<uint> >(NUM_RANKS, vector<uint>(NUM_BANKS,0));
+	rowAccessCounters = vector< vector<unsigned> >(NUM_RANKS, vector<unsigned>(NUM_BANKS,0));
 
 	//create queue based on the structure we want
 	BusPacket1D actualQueue;
@@ -94,7 +94,7 @@ CommandQueue::CommandQueue(vector< vector<BankState> > &states) :
 	for (size_t i=0;i<NUM_RANKS;i++)
 	{
 		//init the empty vectors here so we don't seg fault later
-		tFAWCountdown.push_back(vector<uint>());
+		tFAWCountdown.push_back(vector<unsigned>());
 	}
 }
 CommandQueue::~CommandQueue()
@@ -119,15 +119,15 @@ CommandQueue::~CommandQueue()
 //Adds a command to appropriate queue
 void CommandQueue::enqueue(BusPacket *newBusPacket)
 {
-	uint rank = newBusPacket->rank;
-	uint bank = newBusPacket->bank;
+	unsigned rank = newBusPacket->rank;
+	unsigned bank = newBusPacket->bank;
 	if (queuingStructure==PerRank)
 	{
 		queues[rank][0].push_back(newBusPacket);
 		if (queues[rank][0].size()>CMD_QUEUE_DEPTH)
 		{
 			ERROR("== Error - Enqueued more than allowed in command queue");
-			ERROR("						Need to call .hasRoomFor(int numberToEnqueue, uint rank, uint bank) first");
+			ERROR("						Need to call .hasRoomFor(int numberToEnqueue, unsigned rank, unsigned bank) first");
 			exit(0);
 		}
 	}
@@ -137,7 +137,7 @@ void CommandQueue::enqueue(BusPacket *newBusPacket)
 		if (queues[rank][bank].size()>CMD_QUEUE_DEPTH)
 		{
 			ERROR("== Error - Enqueued more than allowed in command queue");
-			ERROR("						Need to call .hasRoomFor(int numberToEnqueue, uint rank, uint bank) first");
+			ERROR("						Need to call .hasRoomFor(int numberToEnqueue, unsigned rank, unsigned bank) first");
 			exit(0);
 		}
 	}
@@ -238,7 +238,7 @@ bool CommandQueue::pop(BusPacket **busPacket)
 			if (!sendingREF)
 			{
 				bool foundIssuable = false;
-				uint startingRank = nextRank;
+				unsigned startingRank = nextRank;
 				do
 				{
 					//make sure there is something in this queue first
@@ -290,47 +290,49 @@ bool CommandQueue::pop(BusPacket **busPacket)
 			{
 				bool sendREF = true;
 				//make sure we meet all the requirements to send a REF
-				for (size_t i=0;i<NUM_BANKS;i++)
+				for (size_t b=0;b<NUM_BANKS;b++)
 				{
 					//if a bank is active we can't send a REF yet
-					if (bankStates[refreshRank][i].currentBankState == RowActive)
+					if (bankStates[refreshRank][b].currentBankState == RowActive)
 					{
 						sendREF = false;
 						bool closeRow = true;
 						//search for commands going to an open row
-						for (size_t j=0;j<queues[refreshRank][0].size();j++)
+						vector <BusPacket *> &refreshQueue = queues[refreshRank][0];
+
+						for (size_t j=0;j<refreshQueue.size();j++)
 						{
+							BusPacket *packet = refreshQueue[j];
 							//if a command in the queue is going to the same row . . .
-							if (bankStates[refreshRank][i].openRowAddress == queues[refreshRank][0][j]->row &&
-							        i == queues[refreshRank][0][j]->bank)
+							if (bankStates[refreshRank][b].openRowAddress == packet->row &&
+							        b == packet->bank)
 							{
 								// . . . and is not an activate . . .
-								if (queues[refreshRank][0][j]->busPacketType != ACTIVATE)
+								if (packet->busPacketType != ACTIVATE)
 								{
 									closeRow = false;
 									// . . . and can be issued . . .
-									if (isIssuable(queues[refreshRank][0][j]))
+									if (isIssuable(packet))
 									{
 										//send it out
-										*busPacket = queues[refreshRank][0][j];
-										queues[refreshRank][0].erase(queues[refreshRank][0].begin()+j);
+										*busPacket = packet;
+										refreshQueue.erase(refreshQueue.begin()+j);
 										sendingREForPRE = true;
 									}
 									break;
 								}
-								else
+								else //command is an activate
 								{
-									//if we've encounted an ACT, no other command will be of interest
 									break;
 								}
 							}
 						}
 
 						//if the bank is open and we are allowed to close it, then send a PRE
-						if (closeRow && currentClockCycle >= bankStates[refreshRank][i].nextPrecharge)
+						if (closeRow && currentClockCycle >= bankStates[refreshRank][b].nextPrecharge)
 						{
-							rowAccessCounters[refreshRank][i]=0;
-							*busPacket = new BusPacket(PRECHARGE, 0, 0, 0, refreshRank, i, 0);
+							rowAccessCounters[refreshRank][b]=0;
+							*busPacket = new BusPacket(PRECHARGE, 0, 0, 0, refreshRank, b, 0);
 							sendingREForPRE = true;
 						}
 						break;
@@ -338,7 +340,7 @@ bool CommandQueue::pop(BusPacket **busPacket)
 					//	NOTE: the next ACT and next REF can be issued at the same
 					//				point in the future, so just use nextActivate field instead of
 					//				creating a nextRefresh field
-					else if (bankStates[refreshRank][i].nextActivate > currentClockCycle)
+					else if (bankStates[refreshRank][b].nextActivate > currentClockCycle) //and this bank doesn't have an open row
 					{
 						sendREF = false;
 						break;
@@ -358,7 +360,7 @@ bool CommandQueue::pop(BusPacket **busPacket)
 
 			if (!sendingREForPRE)
 			{
-				uint startingRank = nextRank;
+				unsigned startingRank = nextRank;
 				bool foundIssuable = false;
 				do
 				{
@@ -428,8 +430,8 @@ bool CommandQueue::pop(BusPacket **busPacket)
 				{
 					//search for banks to close
 					bool sendingPRE = false;
-					uint startingRank = nextRankPRE;
-					uint startingBank = nextBankPRE;
+					unsigned startingRank = nextRankPRE;
+					unsigned startingBank = nextBankPRE;
 					do
 					{
 						bool found = false;
@@ -459,41 +461,7 @@ bool CommandQueue::pop(BusPacket **busPacket)
 								}
 							}
 						}
-
-						//rank-then-bank round robin
-						if (schedulingPolicy == RankThenBankRoundRobin)
-						{
-							nextRankPRE++;
-							if (nextRankPRE == NUM_RANKS)
-							{
-								nextRankPRE = 0;
-								nextBankPRE++;
-								if (nextBankPRE == NUM_BANKS)
-								{
-									nextBankPRE = 0;
-								}
-							}
-						}
-						//bank-then-rank round robin
-						else if (schedulingPolicy == BankThenRankRoundRobin)
-						{
-							nextBankPRE++;
-							if (nextBankPRE == NUM_BANKS)
-							{
-								nextBankPRE = 0;
-								nextRankPRE++;
-								if (nextRankPRE == NUM_RANKS)
-								{
-									nextRankPRE = 0;
-								}
-							}
-						}
-						else
-						{
-							ERROR("== Error - Unknown scheduling policy");
-							exit(0);
-						}
-
+						nextRankAndBank(nextRankPRE, nextBankPRE);		
 					}
 					while (!(startingRank == nextRankPRE && startingBank == nextBankPRE));
 
@@ -563,8 +531,8 @@ bool CommandQueue::pop(BusPacket **busPacket)
 			//if we're not sending a REF, proceed as normal
 			if (!sendingREF)
 			{
-				uint startingRank = nextRank;
-				uint startingBank = nextBank;
+				unsigned startingRank = nextRank;
+				unsigned startingBank = nextBank;
 				bool foundIssuable = false;
 				do
 				{
@@ -581,40 +549,7 @@ bool CommandQueue::pop(BusPacket **busPacket)
 							break;
 						}
 					}
-
-					//rank-then-bank round robin
-					if (schedulingPolicy == RankThenBankRoundRobin)
-					{
-						nextRank++;
-						if (nextRank == NUM_RANKS)
-						{
-							nextRank = 0;
-							nextBank++;
-							if (nextBank == NUM_BANKS)
-							{
-								nextBank = 0;
-							}
-						}
-					}
-					//bank-then-rank round robin
-					else if (schedulingPolicy == BankThenRankRoundRobin)
-					{
-						nextBank++;
-						if (nextBank == NUM_BANKS)
-						{
-							nextBank = 0;
-							nextRank++;
-							if (nextRank == NUM_RANKS)
-							{
-								nextRank = 0;
-							}
-						}
-					}
-					else
-					{
-						ERROR("== Error - Unknown scheduling policy");
-						exit(0);
-					}
+					nextRankAndBank(nextRank, nextBank);
 				}
 				while (!(startingRank == nextRank && startingBank == nextBank));
 
@@ -694,8 +629,8 @@ bool CommandQueue::pop(BusPacket **busPacket)
 
 			if (!sendingREForPRE)
 			{
-				uint startingRank = nextRank;
-				uint startingBank = nextBank;
+				unsigned startingRank = nextRank;
+				unsigned startingBank = nextBank;
 				bool foundIssuable = false;
 				do
 				{
@@ -749,40 +684,8 @@ bool CommandQueue::pop(BusPacket **busPacket)
 
 					//if we found something, break out of do-while
 					if (foundIssuable) break;
+					nextRankAndBank(nextRank, nextBank); 
 
-					//rank-then-bank round robin
-					if (schedulingPolicy == RankThenBankRoundRobin)
-					{
-						nextRank++;
-						if (nextRank == NUM_RANKS)
-						{
-							nextRank = 0;
-							nextBank++;
-							if (nextBank == NUM_BANKS)
-							{
-								nextBank = 0;
-							}
-						}
-					}
-					//bank-then-rank round robin
-					else if (schedulingPolicy == BankThenRankRoundRobin)
-					{
-						nextBank++;
-						if (nextBank == NUM_BANKS)
-						{
-							nextBank = 0;
-							nextRank++;
-							if (nextRank == NUM_RANKS)
-							{
-								nextRank = 0;
-							}
-						}
-					}
-					else
-					{
-						ERROR("== Error - Unknown scheduling policy");
-						exit(0);
-					}
 				}
 				while (!(startingRank == nextRank && startingBank == nextBank));
 
@@ -822,41 +725,7 @@ bool CommandQueue::pop(BusPacket **busPacket)
 								}
 							}
 						}
-
-
-						//rank-then-bank round robin
-						if (schedulingPolicy == RankThenBankRoundRobin)
-						{
-							nextRankPRE++;
-							if (nextRankPRE == NUM_RANKS)
-							{
-								nextRankPRE = 0;
-								nextBankPRE++;
-								if (nextBankPRE == NUM_BANKS)
-								{
-									nextBankPRE = 0;
-								}
-							}
-						}
-						//bank-then-rank round robin
-						else if (schedulingPolicy == BankThenRankRoundRobin)
-						{
-							nextBankPRE++;
-							if (nextBankPRE == NUM_BANKS)
-							{
-								nextBankPRE = 0;
-								nextRankPRE++;
-								if (nextRankPRE == NUM_RANKS)
-								{
-									nextRankPRE = 0;
-								}
-							}
-						}
-						else
-						{
-							ERROR("== Error - Unknown scheduling policy");
-							exit(0);
-						}
+						nextRankAndBank(nextRankPRE, nextBankPRE);
 					}
 					while (!(startingRank == nextRankPRE && startingBank == nextBankPRE));
 
@@ -929,7 +798,7 @@ bool CommandQueue::pop(BusPacket **busPacket)
 }
 
 //check if a rank/bank queue has room for a certain number of bus packets
-bool CommandQueue::hasRoomFor(uint numberToEnqueue, uint rank, uint bank)
+bool CommandQueue::hasRoomFor(unsigned numberToEnqueue, unsigned rank, unsigned bank)
 {
 	if (queuingStructure == PerRank)
 	{
@@ -1057,7 +926,7 @@ bool CommandQueue::isIssuable(BusPacket *busPacket)
 }
 
 //figures out if a rank's queue is empty
-bool CommandQueue::isEmpty(uint rank)
+bool CommandQueue::isEmpty(unsigned rank)
 {
 	if (queuingStructure == PerRank)
 	{
@@ -1079,10 +948,47 @@ bool CommandQueue::isEmpty(uint rank)
 }
 
 //tells the command queue that a particular rank is in need of a refresh
-void CommandQueue::needRefresh(uint rank)
+void CommandQueue::needRefresh(unsigned rank)
 {
 	refreshWaiting = true;
 	refreshRank = rank;
+}
+
+void CommandQueue::nextRankAndBank(unsigned &rank, unsigned &bank)
+{
+	if (schedulingPolicy == RankThenBankRoundRobin)
+	{
+		rank++;
+		if (rank == NUM_RANKS)
+		{
+			rank = 0;
+			bank++;
+			if (bank == NUM_BANKS)
+			{
+				bank = 0;
+			}
+		}
+	}
+	//bank-then-rank round robin
+	else if (schedulingPolicy == BankThenRankRoundRobin)
+	{
+		bank++;
+		if (bank == NUM_BANKS)
+		{
+			bank = 0;
+			rank++;
+			if (rank == NUM_RANKS)
+			{
+				rank = 0;
+			}
+		}
+	}
+	else
+	{
+		ERROR("== Error - Unknown scheduling policy");
+		exit(0);
+	}
+
 }
 
 void CommandQueue::update()
