@@ -1,25 +1,34 @@
-/****************************************************************************
-*	 DRAMSim2: A Cycle Accurate DRAM simulator 
-*	 
-*	 Copyright (C) 2010   	Elliott Cooper-Balis
-*									Paul Rosenfeld 
-*									Bruce Jacob
-*									University of Maryland
-*
-*	 This program is free software: you can redistribute it and/or modify
-*	 it under the terms of the GNU General Public License as published by
-*	 the Free Software Foundation, either version 3 of the License, or
-*	 (at your option) any later version.
-*
-*	 This program is distributed in the hope that it will be useful,
-*	 but WITHOUT ANY WARRANTY; without even the implied warranty of
-*	 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-*	 GNU General Public License for more details.
-*
-*	 You should have received a copy of the GNU General Public License
-*	 along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*
-*****************************************************************************/
+/*********************************************************************************
+*  Copyright (c) 2010-2011, Elliott Cooper-Balis
+*                             Paul Rosenfeld
+*                             Bruce Jacob
+*                             University of Maryland 
+*                             dramninjas [at] gmail [dot] com
+*  All rights reserved.
+*  
+*  Redistribution and use in source and binary forms, with or without
+*  modification, are permitted provided that the following conditions are met:
+*  
+*     * Redistributions of source code must retain the above copyright notice,
+*        this list of conditions and the following disclaimer.
+*  
+*     * Redistributions in binary form must reproduce the above copyright notice,
+*        this list of conditions and the following disclaimer in the documentation
+*        and/or other materials provided with the distribution.
+*  
+*  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+*  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+*  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+*  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+*  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+*  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+*  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+*  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+*  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+*  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*********************************************************************************/
+
+
 
 //TraceBasedSim.cpp
 //
@@ -35,7 +44,9 @@
 
 #include "SystemConfiguration.h"
 #include "MemorySystem.h"
+#include "MultiChannelMemorySystem.h"
 #include "Transaction.h"
+#include "IniReader.h"
 
 
 using namespace DRAMSim;
@@ -128,29 +139,26 @@ class TransactionReceiver
 void usage()
 {
 	cout << "DRAMSim2 Usage: " << endl;
-	cout << "DRAMSim -t tracefile -s system.ini -d ini/device.ini [-c #] [-p pwd] -q" <<endl;
+	cout << "DRAMSim -t tracefile -s system.ini -d ini/device.ini [-c #] [-p pwd] [-q] [-S 2048] [-n] [-o OPTION_A=1234,tRC=14,tFAW=19]" <<endl;
 	cout << "\t-t, --tracefile=FILENAME \tspecify a tracefile to run  "<<endl;
 	cout << "\t-s, --systemini=FILENAME \tspecify an ini file that describes the memory system parameters  "<<endl;
 	cout << "\t-d, --deviceini=FILENAME \tspecify an ini file that describes the device-level parameters"<<endl;
 	cout << "\t-c, --numcycles=# \t\tspecify number of cycles to run the simulation for [default=30] "<<endl;
 	cout << "\t-q, --quiet \t\t\tflag to suppress simulation output (except final stats) [default=no]"<<endl;
-	cout << "\t-o, --option=OPTION_A=234\t\t\toverwrite any ini file option from the command line"<<endl;
+	cout << "\t-o, --option=OPTION_A=234,tFAW=14\t\t\toverwrite any ini file option from the command line"<<endl;
 	cout << "\t-p, --pwd=DIRECTORY\t\tSet the working directory (i.e. usually DRAMSim directory where ini/ and results/ are)"<<endl;
-	cout << "\t-S, --size=# \t\t\tSize of the memory system in megabytes"<<endl;
+	cout << "\t-S, --size=# \t\t\tSize of the memory system in megabytes [default=2048M]"<<endl;
+	cout << "\t-n, --notiming \t\t\tDo not use the clock cycle information in the trace file"<<endl;
+	cout << "\t-v, --visfile \t\t\tVis output filename"<<endl;
 }
 #endif
 
-void *parseTraceFileLine(string &line, uint64_t &addr, enum TransactionType &transType, uint64_t &clockCycle, TraceType type)
+void *parseTraceFileLine(string &line, uint64_t &addr, enum TransactionType &transType, uint64_t &clockCycle, TraceType type, bool useClockCycle)
 {
 	size_t previousIndex=0;
 	size_t spaceIndex=0;
 	uint64_t *dataBuffer = NULL;
 	string addressStr="", cmdStr="", dataStr="", ccStr="";
-#ifndef _SIM_
-	bool useClockCycle = false;
-#else
-	bool useClockCycle = true;
-#endif
 
 	switch (type)
 	{
@@ -325,21 +333,53 @@ void alignTransactionAddress(Transaction &trans)
 	trans.address >>= throwAwayBits;
 	trans.address <<= throwAwayBits;
 }
+
+/** 
+ * Override options can be specified on the command line as -o key1=value1,key2=value2
+ * this method should parse the key-value pairs and put them into a map 
+ **/ 
+IniReader::OverrideMap *parseParamOverrides(const string &kv_str)
+{
+	IniReader::OverrideMap *kv_map = new IniReader::OverrideMap(); 
+	size_t start = 0, comma=0, equal_sign=0;
+	// split the commas if they are there
+	while (1)
+	{
+		equal_sign = kv_str.find('=', start); 
+		if (equal_sign == string::npos)
+		{
+			break;
+		}
+
+		comma = kv_str.find(',', equal_sign);
+		if (comma == string::npos)
+		{
+			comma = kv_str.length();
+		}
+
+		string key = kv_str.substr(start, equal_sign-start);
+		string value = kv_str.substr(equal_sign+1, comma-equal_sign-1); 
+
+		(*kv_map)[key] = value; 
+		start = comma+1;
+
+	}
+	return kv_map; 
+}
+
 int main(int argc, char **argv)
 {
 	int c;
-	string traceFileName = "";
 	TraceType traceType;
-	string systemIniFilename = "system.ini";
-	string deviceIniFilename = "";
-	string pwdString = "";
+	string traceFileName;
+	string systemIniFilename("system.ini");
+	string deviceIniFilename;
+	string pwdString;
+	string *visFilename = NULL;
 	unsigned megsOfMemory=2048;
-
-	bool overrideOpt = false;
-	string overrideKey = "";
-	string overrideVal = "";
-	string tmp = "";
-	size_t equalsign;
+	bool useClockCycle=true;
+	
+	IniReader::OverrideMap *paramOverrides = NULL; 
 
 	unsigned numCycles=1000;
 	//getopt stuff
@@ -350,16 +390,18 @@ int main(int argc, char **argv)
 			{"deviceini", required_argument, 0, 'd'},
 			{"tracefile", required_argument, 0, 't'},
 			{"systemini", required_argument, 0, 's'},
+
 			{"pwd", required_argument, 0, 'p'},
 			{"numcycles",  required_argument,	0, 'c'},
 			{"option",  required_argument,	0, 'o'},
 			{"quiet",  no_argument, &SHOW_SIM_OUTPUT, 'q'},
 			{"help", no_argument, 0, 'h'},
 			{"size", required_argument, 0, 'S'},
+			{"visfile", required_argument, 0, 'v'},
 			{0, 0, 0, 0}
 		};
 		int option_index=0; //for getopt
-		c = getopt_long (argc, argv, "t:s:c:d:o:p:S:bkq", long_options, &option_index);
+		c = getopt_long (argc, argv, "t:s:c:d:o:p:S:v:qn", long_options, &option_index);
 		if (c == -1)
 		{
 			break;
@@ -404,12 +446,14 @@ int main(int argc, char **argv)
 		case 'q':
 			SHOW_SIM_OUTPUT=false;
 			break;
+		case 'n':
+			useClockCycle=false;
+			break;
 		case 'o':
-			tmp = string(optarg);
-			equalsign = tmp.find_first_of('=');
-			overrideKey = tmp.substr(0,equalsign);
-			overrideVal = tmp.substr(equalsign+1,tmp.size()-equalsign+1);
-			overrideOpt = true;
+			paramOverrides = parseParamOverrides(string(optarg)); 
+			break;
+		case 'v':
+			visFilename = new string(optarg);
 			break;
 		case '?':
 			usage();
@@ -463,7 +507,10 @@ int main(int argc, char **argv)
 	string line;
 
 
-	MemorySystem *memorySystem = new MemorySystem(0, deviceIniFilename, systemIniFilename, pwdString, traceFileName, megsOfMemory);
+	MultiChannelMemorySystem *memorySystem = new MultiChannelMemorySystem(deviceIniFilename, systemIniFilename, pwdString, traceFileName, megsOfMemory, visFilename, paramOverrides);
+	// don't need this anymore 
+	delete paramOverrides;
+
 
 #ifdef RETURN_TRANSACTIONS
 	TransactionReceiver transactionReceiver; 
@@ -501,7 +548,7 @@ int main(int argc, char **argv)
 
 				if (line.size() > 0)
 				{
-					data = parseTraceFileLine(line, addr, transType,clockCycle, traceType);
+					data = parseTraceFileLine(line, addr, transType,clockCycle, traceType,useClockCycle);
 					trans = Transaction(transType, addr, data);
 					alignTransactionAddress(trans); 
 
@@ -551,7 +598,7 @@ int main(int argc, char **argv)
 	}
 
 	traceFile.close();
-	(*memorySystem).printStats(true);
+	(*memorySystem).printStats();
 	// make valgrind happy
 	delete(memorySystem);
 }

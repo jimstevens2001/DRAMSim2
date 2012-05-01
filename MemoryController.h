@@ -1,29 +1,32 @@
-/****************************************************************************
-*	 DRAMSim2: A Cycle Accurate DRAM simulator 
-*	 
-*	 Copyright (C) 2010   	Elliott Cooper-Balis
-*									Paul Rosenfeld 
-*									Bruce Jacob
-*									University of Maryland
-*
-*	 This program is free software: you can redistribute it and/or modify
-*	 it under the terms of the GNU General Public License as published by
-*	 the Free Software Foundation, either version 3 of the License, or
-*	 (at your option) any later version.
-*
-*	 This program is distributed in the hope that it will be useful,
-*	 but WITHOUT ANY WARRANTY; without even the implied warranty of
-*	 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-*	 GNU General Public License for more details.
-*
-*	 You should have received a copy of the GNU General Public License
-*	 along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*
-*****************************************************************************/
-
-
-
-
+/*********************************************************************************
+*  Copyright (c) 2010-2011, Elliott Cooper-Balis
+*                             Paul Rosenfeld
+*                             Bruce Jacob
+*                             University of Maryland 
+*                             dramninjas [at] gmail [dot] com
+*  All rights reserved.
+*  
+*  Redistribution and use in source and binary forms, with or without
+*  modification, are permitted provided that the following conditions are met:
+*  
+*     * Redistributions of source code must retain the above copyright notice,
+*        this list of conditions and the following disclaimer.
+*  
+*     * Redistributions in binary form must reproduce the above copyright notice,
+*        this list of conditions and the following disclaimer in the documentation
+*        and/or other materials provided with the distribution.
+*  
+*  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+*  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+*  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+*  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+*  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+*  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+*  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+*  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+*  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+*  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*********************************************************************************/
 
 
 #ifndef MEMORYCONTROLLER_H
@@ -41,10 +44,10 @@
 #include "BusPacket.h"
 #include "BankState.h"
 #include "Rank.h"
+#include "CSVWriter.h"
 #include <map>
 
 using namespace std;
-using namespace DRAMSim;
 
 namespace DRAMSim
 {
@@ -71,7 +74,6 @@ public:
 	vector< vector <BankState> > bankStates;
 private:
 	//functions
-	void addressMapping(uint64_t physicalAddress, unsigned &rank, unsigned &bank, unsigned &row, unsigned &col);
 	void insertHistogram(unsigned latencyValue, unsigned rank, unsigned bank);
 
 	//fields
@@ -91,6 +93,7 @@ private:
 
 	//output file
 	std::ofstream *visDataOut;
+	CSVWriter csvOut; 
 
 	// these packets are counting down waiting to be transmitted on the "bus"
 	BusPacket *outgoingCmdPacket;
@@ -106,11 +109,6 @@ private:
 	vector<uint64_t> totalReadsPerRank;
 	vector<uint64_t> totalWritesPerRank;
 
-	// energy values are per rank
-	vector< uint64_t > backgroundEnergy;
-	vector< uint64_t > burstEnergy;
-	vector< uint64_t > actpreEnergy;
-	vector< uint64_t > refreshEnergy;
 
 	vector< uint64_t > totalEpochLatency;
 
@@ -123,6 +121,13 @@ private:
 
 
 	unsigned refreshRank;
+	
+public:
+	// energy values are per rank -- SST uses these directly, so make these public 
+	vector< uint64_t > backgroundEnergy;
+	vector< uint64_t > burstEnergy;
+	vector< uint64_t > actpreEnergy;
+	vector< uint64_t > refreshEnergy;
 
 };
 }

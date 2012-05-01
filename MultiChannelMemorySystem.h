@@ -27,58 +27,49 @@
 *  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 *  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *********************************************************************************/
+#include "SimulatorObject.h"
+#include "Transaction.h"
+#include "SystemConfiguration.h"
+#include "MemorySystem.h"
+#include "IniReader.h"
 
 
+namespace DRAMSim {
 
-#ifndef CALLBACK_H
-#define CALLBACK_H
 
-namespace DRAMSim
+class MultiChannelMemorySystem : public SimulatorObject 
 {
+	public: 
 
-template <typename ReturnT, typename Param1T, typename Param2T,
-typename Param3T>
-class CallbackBase
-{
-public:
-	virtual ~CallbackBase() = 0;
-	virtual ReturnT operator()(Param1T, Param2T, Param3T) = 0;
-};
+	MultiChannelMemorySystem(const string &dev, const string &sys, const string &pwd, const string &trc, unsigned megsOfMemory, string *visFilename=NULL, const IniReader::OverrideMap *paramOverrides=NULL);
+		virtual ~MultiChannelMemorySystem();
+			bool addTransaction(Transaction &trans);
+			bool addTransaction(bool isWrite, uint64_t addr);
+			bool willAcceptTransaction(); 
+			bool willAcceptTransaction(uint64_t addr); 
+			void update();
+			void printStats();
+			void RegisterCallbacks( 
+				TransactionCompleteCB *readDone,
+				TransactionCompleteCB *writeDone,
+				void (*reportPower)(double bgpower, double burstpower, double refreshpower, double actprepower));
 
-template <typename Return, typename Param1T, typename Param2T, typename Param3T>
-DRAMSim::CallbackBase<Return,Param1T,Param2T,Param3T>::~CallbackBase() {}
+	void InitOutputFiles(string tracefilename);
 
-template <typename ConsumerT, typename ReturnT,
-typename Param1T, typename Param2T, typename Param3T >
-class Callback: public CallbackBase<ReturnT,Param1T,Param2T,Param3T>
-{
-private:
-	typedef ReturnT (ConsumerT::*PtrMember)(Param1T,Param2T,Param3T);
+	//output file
+	std::ofstream visDataOut;
 
-public:
-	Callback( ConsumerT* const object, PtrMember member) :
-			object(object), member(member)
-	{
-	}
+	private:
+		unsigned findChannelNumber(uint64_t addr);
+		vector<MemorySystem*> channels; 
+		unsigned megsOfMemory; 
+		string deviceIniFilename;
+		string systemIniFilename;
+		string traceFilename;
+		string pwd;
+		string *visFilename;
+		static void mkdirIfNotExist(string path);
+		static bool fileExists(string path); 
 
-	Callback( const Callback<ConsumerT,ReturnT,Param1T,Param2T,Param3T>& e ) :
-			object(e.object), member(e.member)
-	{
-	}
-
-	ReturnT operator()(Param1T param1, Param2T param2, Param3T param3)
-	{
-		return (const_cast<ConsumerT*>(object)->*member)
-		       (param1,param2,param3);
-	}
-
-private:
-
-	ConsumerT* const object;
-	const PtrMember  member;
-};
-
-typedef CallbackBase <void, unsigned, uint64_t, uint64_t> TransactionCompleteCB;
-} // namespace DRAMSim
-
-#endif
+	};
+}

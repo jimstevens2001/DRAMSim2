@@ -1,25 +1,34 @@
-/****************************************************************************
-*	 DRAMSim2: A Cycle Accurate DRAM simulator 
-*	 
-*	 Copyright (C) 2010   	Elliott Cooper-Balis
-*									Paul Rosenfeld 
-*									Bruce Jacob
-*									University of Maryland
-*
-*	 This program is free software: you can redistribute it and/or modify
-*	 it under the terms of the GNU General Public License as published by
-*	 the Free Software Foundation, either version 3 of the License, or
-*	 (at your option) any later version.
-*
-*	 This program is distributed in the hope that it will be useful,
-*	 but WITHOUT ANY WARRANTY; without even the implied warranty of
-*	 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-*	 GNU General Public License for more details.
-*
-*	 You should have received a copy of the GNU General Public License
-*	 along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*
-*****************************************************************************/
+/*********************************************************************************
+*  Copyright (c) 2010-2011, Elliott Cooper-Balis
+*                             Paul Rosenfeld
+*                             Bruce Jacob
+*                             University of Maryland 
+*                             dramninjas [at] gmail [dot] com
+*  All rights reserved.
+*  
+*  Redistribution and use in source and binary forms, with or without
+*  modification, are permitted provided that the following conditions are met:
+*  
+*     * Redistributions of source code must retain the above copyright notice,
+*        this list of conditions and the following disclaimer.
+*  
+*     * Redistributions in binary form must reproduce the above copyright notice,
+*        this list of conditions and the following disclaimer in the documentation
+*        and/or other materials provided with the distribution.
+*  
+*  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+*  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+*  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+*  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+*  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+*  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+*  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+*  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+*  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+*  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*********************************************************************************/
+
+
 
 
 
@@ -410,16 +419,19 @@ void IniReader::ReadIniFile(string filename, bool isSystemFile)
 	}
 }
 
-void IniReader::OverrideKeys(vector<string> keys, vector<string>values)
+void IniReader::OverrideKeys(const OverrideMap *map)
 {
-	if (keys.size() != values.size())
+	if (!map)
+		return; 
+
+	OverrideIterator it = map->begin();
+	DEBUG("Key overrides from command line:"); 
+	for (it=map->begin(); it != map->end(); it++)
 	{
-		ERROR("-o option is messed up");
-		exit(-1);
-	}
-	for (size_t i=0; i<keys.size(); i++)
-	{
-		IniReader::SetKey(keys[i], values[i]);
+		string key = it->first; 
+		string value = it->second; 
+		DEBUG("\t'"<< key <<"'->'"<< value<< "'"); 
+		IniReader::SetKey(key,value);
 	}
 }
 
@@ -501,9 +513,17 @@ void IniReader::InitEnumsFromStrings()
 			DEBUG("ADDR SCHEME: 6");
 		}
 	}
+	else if (ADDRESS_MAPPING_SCHEME == "scheme7")
+	{
+		addressMappingScheme = Scheme7;
+		if (DEBUG_INI_READER) 
+		{
+			DEBUG("ADDR SCHEME: 7");
+		}
+	}
 	else
 	{
-		cout << "WARNING: unknown address mapping scheme '"<<ADDRESS_MAPPING_SCHEME<<"'; valid values are 'scheme1', 'scheme2', 'scheme3', 'scheme4', 'scheme5'. Defaulting to scheme1"<<endl;
+		cout << "WARNING: unknown address mapping scheme '"<<ADDRESS_MAPPING_SCHEME<<"'; valid values are 'scheme1'...'scheme7'. Defaulting to scheme1"<<endl;
 		addressMappingScheme = Scheme1;
 	}
 

@@ -1,25 +1,34 @@
-/****************************************************************************
-*	 DRAMSim2: A Cycle Accurate DRAM simulator 
-*	 
-*	 Copyright (C) 2010   	Elliott Cooper-Balis
-*									Paul Rosenfeld 
-*									Bruce Jacob
-*									University of Maryland
-*
-*	 This program is free software: you can redistribute it and/or modify
-*	 it under the terms of the GNU General Public License as published by
-*	 the Free Software Foundation, either version 3 of the License, or
-*	 (at your option) any later version.
-*
-*	 This program is distributed in the hope that it will be useful,
-*	 but WITHOUT ANY WARRANTY; without even the implied warranty of
-*	 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-*	 GNU General Public License for more details.
-*
-*	 You should have received a copy of the GNU General Public License
-*	 along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*
-*****************************************************************************/
+/*********************************************************************************
+*  Copyright (c) 2010-2011, Elliott Cooper-Balis
+*                             Paul Rosenfeld
+*                             Bruce Jacob
+*                             University of Maryland 
+*                             dramninjas [at] gmail [dot] com
+*  All rights reserved.
+*  
+*  Redistribution and use in source and binary forms, with or without
+*  modification, are permitted provided that the following conditions are met:
+*  
+*     * Redistributions of source code must retain the above copyright notice,
+*        this list of conditions and the following disclaimer.
+*  
+*     * Redistributions in binary form must reproduce the above copyright notice,
+*        this list of conditions and the following disclaimer in the documentation
+*        and/or other materials provided with the distribution.
+*  
+*  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+*  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+*  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+*  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+*  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+*  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+*  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+*  CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+*  OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+*  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+*********************************************************************************/
+
+
 
 //MemoryController.cpp
 //
@@ -28,6 +37,7 @@
 
 #include "MemoryController.h"
 #include "MemorySystem.h"
+#include "AddressMapping.h"
 
 #define SEQUENTIAL(rank,bank) (rank*NUM_BANKS)+bank
 
@@ -36,22 +46,17 @@ using namespace DRAMSim;
 MemoryController::MemoryController(MemorySystem *parent, std::ofstream *outfile) :
 		commandQueue (CommandQueue(bankStates)),
 		poppedBusPacket(NULL),
+		csvOut(*outfile),
 		totalTransactions(0),
-		channelBitWidth (dramsim_log2(NUM_CHANS)),
-		rankBitWidth (dramsim_log2(NUM_RANKS)),
-		bankBitWidth (dramsim_log2(NUM_BANKS)),
-		rowBitWidth (dramsim_log2(NUM_ROWS)),
-		colBitWidth (dramsim_log2(NUM_COLS)),
-		// this forces the alignment to the width of a single burst (64 bits = 8 bytes = 3 address bits for DDR parts)
-		byteOffsetWidth (dramsim_log2((JEDEC_DATA_BUS_BITS/8))),
 		refreshRank(0)
 {
 	//get handle on parent
 	parentMemorySystem = parent;
-	if (VIS_FILE_OUTPUT) 
+	if (VIS_FILE_OUTPUT)
 	{
-		visDataOut = outfile;
+		visDataOut = outfile; 
 	}
+
 
 	//bus related fields
 	outgoingCmdPacket = NULL;
@@ -479,16 +484,15 @@ void MemoryController::update()
 		Transaction transaction = transactionQueue[i];
 
 		//map address to rank,bank,row,col
-		unsigned newTransactionRank, newTransactionBank, newTransactionRow, newTransactionColumn;
+		unsigned newTransactionChan, newTransactionRank, newTransactionBank, newTransactionRow, newTransactionColumn;
 
 		// pass these in as references so they get set by the addressMapping function
-		addressMapping(transaction.address, newTransactionRank, newTransactionBank, newTransactionRow, newTransactionColumn);
+		addressMapping(transaction.address, newTransactionChan, newTransactionRank, newTransactionBank, newTransactionRow, newTransactionColumn);
 
 		//if we have room, break up the transaction into the appropriate commands
 		//and add them to the command queue
 		if (commandQueue.hasRoomFor(2, newTransactionRank, newTransactionBank))
 		{
-
 			if (DEBUG_ADDR_MAP) 
 			{
 				PRINTN("== New Transaction - Mapping Address [0x" << hex << transaction.address << dec << "]");
@@ -506,58 +510,37 @@ void MemoryController::update()
 				PRINT("  Col  : " << newTransactionColumn);
 			}
 
+			// If we have a read, save the transaction so when the data comes back
+			// in a bus packet, we can staple it back into a transaction and return it
 			if (transaction.transactionType == DATA_READ)
 			{
 				pendingReadTransactions.push_back(transaction);
 			}
-			//now that we know there is room, we can remove from the transaction queue
+
+			//now that we know there is room in the command queue, we can remove from the transaction queue
 			transactionQueue.erase(transactionQueue.begin()+i);
 
 			//create activate command to the row we just translated
-			BusPacket *ACTcommand = new BusPacket(ACTIVATE, transaction.address, newTransactionColumn, newTransactionRow,
-			                                 newTransactionRank, newTransactionBank, 0);
-			commandQueue.enqueue(ACTcommand);
+			BusPacket *ACTcommand = new BusPacket(ACTIVATE, transaction.address,
+					newTransactionColumn, newTransactionRow, newTransactionRank,
+					newTransactionBank, 0);
 
 			//create read or write command and enqueue it
-			if (transaction.transactionType == DATA_READ)
-			{
-				BusPacket *READcommand;
-				if (rowBufferPolicy == OpenPage)
-				{
-					READcommand = new BusPacket(READ, transaction.address, newTransactionColumn, newTransactionRow,
-					                        newTransactionRank, newTransactionBank,0);
-					commandQueue.enqueue(READcommand);
-				}
-				else if (rowBufferPolicy == ClosePage)
-				{
-					READcommand = new BusPacket(READ_P, transaction.address, newTransactionColumn, newTransactionRow,
-					                        newTransactionRank, newTransactionBank,0);
-					commandQueue.enqueue(READcommand);
-				}
-			}
-			else if (transaction.transactionType == DATA_WRITE)
-			{
-				BusPacket *WRITEcommand;
-				if (rowBufferPolicy == OpenPage)
-				{
-					WRITEcommand = new BusPacket(WRITE, transaction.address, newTransactionColumn, newTransactionRow,
-					                         newTransactionRank, newTransactionBank, transaction.data);
-					commandQueue.enqueue(WRITEcommand);
-				}
-				else if (rowBufferPolicy == ClosePage)
-				{
-					WRITEcommand = new BusPacket(WRITE_P, transaction.address, newTransactionColumn, newTransactionRow,
-					                         newTransactionRank, newTransactionBank, transaction.data);
-					commandQueue.enqueue(WRITEcommand);
-				}
-			}
-			else
-			{
-				ERROR("== Error -	 Unknown transaction type");
-				exit(0);
-			}
+			BusPacketType bpType = transaction.getBusPacketType();
+			BusPacket *command = new BusPacket(bpType, transaction.address,
+					newTransactionColumn, newTransactionRow, newTransactionRank,
+					newTransactionBank, transaction.data);
+
+			/* only allow one transaction to be scheduled per cycle -- this should
+			 * be a reasonable assumption considering how much logic would be
+			 * required to schedule multiple entries per cycle (parallel data
+			 * lines, switching logic, decision logic)
+			 */
+			commandQueue.enqueue(ACTcommand);
+			commandQueue.enqueue(command);
+			break;
 		}
-		else
+		else // no room, do nothing this cycle
 		{
 			//PRINT( "== Warning - No room in command queue" << endl;
 		}
@@ -580,6 +563,7 @@ void MemoryController::update()
 					if (bankStates[i][j].currentBankState != Idle)
 					{
 						allIdle = false;
+						break;
 					}
 				}
 
@@ -671,8 +655,8 @@ void MemoryController::update()
 				//		pendingReadTransactions[i].print();
 				//		exit(0);
 				//	}
-				unsigned rank,bank,row,col;
-				addressMapping(returnTransaction[0].address,rank,bank,row,col);
+				unsigned chan,rank,bank,row,col;
+				addressMapping(returnTransaction[0].address,chan,rank,bank,row,col);
 				insertHistogram(currentClockCycle-pendingReadTransactions[i].timeAdded,rank,bank);
 				//return latency
 				returnReadData(pendingReadTransactions[i]);
@@ -753,6 +737,7 @@ void MemoryController::update()
 		{
 			for (size_t j=0; j<NUM_BANKS; j++)
 			{
+				//XXX: this means the bank list won't be printed for partial epochs
 				grandTotalBankAccesses[SEQUENTIAL(i,j)] += totalReadsPerBank[SEQUENTIAL(i,j)] + totalWritesPerBank[SEQUENTIAL(i,j)];
 				totalReadsPerBank[SEQUENTIAL(i,j)] = 0;
 				totalWritesPerBank[SEQUENTIAL(i,j)] = 0;
@@ -789,204 +774,11 @@ bool MemoryController::addTransaction(Transaction &trans)
 	}
 }
 
-void MemoryController::addressMapping(uint64_t physicalAddress, unsigned &newTransactionRank, unsigned &newTransactionBank, unsigned &newTransactionRow, unsigned &newTransactionColumn)
-{
-	uint64_t tempA, tempB;
-	unsigned transactionSize = (JEDEC_DATA_BUS_BITS/8)*BL; 
-	uint64_t transactionMask =  transactionSize - 1; //ex: (64 bit bus width) x (8 Burst Length) - 1 = 64 bytes - 1 = 63 = 0x3f mask
-	// Since we're assuming that a request is for BL*BUS_WIDTH, the bottom bits
-	// of this address *should* be all zeros if it's not, issue a warning
-
-	if ((physicalAddress & transactionMask) != 0)
-	{
-		DEBUG("WARNING: address 0x"<<std::hex<<physicalAddress<<std::dec<<" is not aligned to the request size of "<<transactionSize); 
-	}
-
-	// each burst will contain JEDEC_DATA_BUS_BITS/8 bytes of data, so the bottom bits (3 bits for a single channel DDR system) are
-	// 	thrown away before mapping the other bits
-	physicalAddress >>= byteOffsetWidth;
-
-	// The next thing we have to consider is that when a request is made for a
-	// we've taken into account the granulaity of a single burst by shifting 
-	// off the bottom 3 bits, but a transaction has to take into account the
-	// burst length (i.e. the requests will be aligned to cache line sizes which
-	// should be equal to transactionSize above). 
-	//
-	// Since the column address increments internally on bursts, the bottom n 
-	// bits of the column (colLow) have to be zero in order to account for the 
-	// total size of the transaction. These n bits should be shifted off the 
-	// address and also subtracted from the total column width. 
-	//
-	// I am having a hard time explaining the reasoning here, but it comes down
-	// this: for a 64 byte transaction, the bottom 6 bits of the address must be 
-	// zero. These zero bits must be made up of the byte offset (3 bits) and also
-	// from the bottom bits of the column 
-	// 
-	// For example: cowLowBits = log2(64bytes) - 3 bits = 3 bits 
-	unsigned colLowBitWidth = dramsim_log2(transactionSize) - byteOffsetWidth;
-
-	physicalAddress >>= colLowBitWidth;
-	unsigned colHighBitWidth = colBitWidth - colLowBitWidth; 
-
-#if 0
-	PRINT("Bit widths: ch:"<<channelBitWidth<<" r:"<<rankBitWidth<<" b:"<<bankBitWidth<<" row:"<<rowBitWidth<<" colLow:"<<colLowBitWidth<< " colHigh:"<<colHighBitWidth<<" off:"<<byteOffsetWidth << " Total:"<< (channelBitWidth + rankBitWidth + bankBitWidth + rowBitWidth + colLowBitWidth + colHighBitWidth + byteOffsetWidth));
-	exit(0)
-#endif
-
-	//perform various address mapping schemes
-	if (addressMappingScheme == Scheme1)
-	{
-		//chan:rank:row:col:bank
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> bankBitWidth;
-		tempB = physicalAddress << bankBitWidth;
-		newTransactionBank = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> colHighBitWidth;
-		tempB = physicalAddress << colHighBitWidth;
-		newTransactionColumn = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rowBitWidth;
-		tempB = physicalAddress << rowBitWidth;
-		newTransactionRow = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rankBitWidth;
-		tempB = physicalAddress << rankBitWidth;
-		newTransactionRank = tempA ^ tempB;
-	}
-	else if (addressMappingScheme == Scheme2)
-	{
-		//chan:row:col:bank:rank
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rankBitWidth;
-		tempB = physicalAddress << rankBitWidth;
-		newTransactionRank = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> bankBitWidth;
-		tempB = physicalAddress << bankBitWidth;
-		newTransactionBank = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> colHighBitWidth;
-		tempB = physicalAddress << colHighBitWidth;
-		newTransactionColumn = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rowBitWidth;
-		tempB = physicalAddress << rowBitWidth;
-		newTransactionRow = tempA ^ tempB;
-	}
-	else if (addressMappingScheme == Scheme3)
-	{
-		//chan:rank:bank:col:row
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rowBitWidth;
-		tempB = physicalAddress << rowBitWidth;
-		newTransactionRow = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> colHighBitWidth;
-		tempB = physicalAddress << colHighBitWidth;
-		newTransactionColumn = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> bankBitWidth;
-		tempB = physicalAddress << bankBitWidth;
-		newTransactionBank = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rankBitWidth;
-		tempB = physicalAddress << rankBitWidth;
-		newTransactionRank = tempA ^ tempB;
-	}
-	else if (addressMappingScheme == Scheme4)
-	{
-		//chan:rank:bank:row:col
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> colHighBitWidth;
-		tempB = physicalAddress << colHighBitWidth;
-		newTransactionColumn = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rowBitWidth;
-		tempB = physicalAddress << rowBitWidth;
-		newTransactionRow = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> bankBitWidth;
-		tempB = physicalAddress << bankBitWidth;
-		newTransactionBank = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rankBitWidth;
-		tempB = physicalAddress << rankBitWidth;
-		newTransactionRank = tempA ^ tempB;
-	}
-	else if (addressMappingScheme == Scheme5)
-	{
-		//chan:row:col:rank:bank
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> bankBitWidth;
-		tempB = physicalAddress << bankBitWidth;
-		newTransactionBank = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rankBitWidth;
-		tempB = physicalAddress << rankBitWidth;
-		newTransactionRank = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> colHighBitWidth;
-		tempB = physicalAddress << colHighBitWidth;
-		newTransactionColumn = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rowBitWidth;
-		tempB = physicalAddress << rowBitWidth;
-		newTransactionRow = tempA ^ tempB;
-
-	}
-	else if (addressMappingScheme == Scheme6)
-	{
-		//chan:row:bank:rank:col
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> colHighBitWidth;
-		tempB = physicalAddress << colHighBitWidth;
-		newTransactionColumn = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rankBitWidth;
-		tempB = physicalAddress << rankBitWidth;
-		newTransactionRank = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> bankBitWidth;
-		tempB = physicalAddress << bankBitWidth;
-		newTransactionBank = tempA ^ tempB;
-
-		tempA = physicalAddress;
-		physicalAddress = physicalAddress >> rowBitWidth;
-		tempB = physicalAddress << rowBitWidth;
-		newTransactionRow = tempA ^ tempB;
-
-	}
-	else
-	{
-		ERROR("== Error - Unknown Address Mapping Scheme");
-		exit(-1);
-	}
-
-}
 
 //prints statistics at the end of an epoch or  simulation
 void MemoryController::printStats(bool finalStats)
 {
+	unsigned myChannel = parentMemorySystem->systemID;
 	//skip the print on the first cycle, it's pretty useless
 	if (currentClockCycle == 0)
 		return;
@@ -994,7 +786,7 @@ void MemoryController::printStats(bool finalStats)
 	//if we are not at the end of the epoch, make sure to adjust for the actual number of cycles elapsed
 
 	uint64_t cyclesElapsed = (currentClockCycle % EPOCH_LENGTH == 0) ? EPOCH_LENGTH : currentClockCycle % EPOCH_LENGTH;
-	unsigned bytesPerTransaction = (64*BL)/8;
+	unsigned bytesPerTransaction = (JEDEC_DATA_BUS_BITS*BL)/8;
 	uint64_t totalBytesTransferred = totalTransactions * bytesPerTransaction;
 	double secondsThisEpoch = (double)cyclesElapsed * tCK * 1E-9;
 
@@ -1034,59 +826,68 @@ void MemoryController::printStats(bool finalStats)
 	PRINTN( "   Total Return Transactions : " << totalTransactions );
 	PRINT( " ("<<totalBytesTransferred <<" bytes) aggregate average bandwidth "<<totalBandwidth<<"GB/s");
 
-	if (VIS_FILE_OUTPUT)
+	// only the first memory channel should print the timestamp
+	if (VIS_FILE_OUTPUT && myChannel == 0)
 	{
-		(*visDataOut) << currentClockCycle * tCK * 1E-6<< ":";
+		csvOut << "ms" <<currentClockCycle * tCK * 1E-6; 
 	}
-
-	for (size_t i=0;i<NUM_RANKS;i++)
+	double totalAggregateBandwidth = 0.0;	
+	for (size_t r=0;r<NUM_RANKS;r++)
 	{
 
-		PRINT( "      -Rank   "<<i<<" : ");
-		PRINTN( "        -Reads  : " << totalReadsPerRank[i]);
-		PRINT( " ("<<totalReadsPerRank[i] * bytesPerTransaction<<" bytes)");
-		PRINTN( "        -Writes : " << totalWritesPerRank[i]);
-		PRINT( " ("<<totalWritesPerRank[i] * bytesPerTransaction<<" bytes)");
+		PRINT( "      -Rank   "<<r<<" : ");
+		PRINTN( "        -Reads  : " << totalReadsPerRank[r]);
+		PRINT( " ("<<totalReadsPerRank[r] * bytesPerTransaction<<" bytes)");
+		PRINTN( "        -Writes : " << totalWritesPerRank[r]);
+		PRINT( " ("<<totalWritesPerRank[r] * bytesPerTransaction<<" bytes)");
 		for (size_t j=0;j<NUM_BANKS;j++)
 		{
-			PRINT( "        -Bandwidth / Latency  (Bank " <<j<<"): " <<bandwidth[SEQUENTIAL(i,j)] << " GB/s\t\t" <<averageLatency[SEQUENTIAL(i,j)] << " ns");
+			PRINT( "        -Bandwidth / Latency  (Bank " <<j<<"): " <<bandwidth[SEQUENTIAL(r,j)] << " GB/s\t\t" <<averageLatency[SEQUENTIAL(r,j)] << " ns");
 		}
 
 		// factor of 1000 at the end is to account for the fact that totalEnergy is accumulated in mJ since IDD values are given in mA
-		backgroundPower[i] = ((double)backgroundEnergy[i] / (double)(cyclesElapsed)) * Vdd / 1000.0;
-		burstPower[i] = ((double)burstEnergy[i] / (double)(cyclesElapsed)) * Vdd / 1000.0;
-		refreshPower[i] = ((double) refreshEnergy[i] / (double)(cyclesElapsed)) * Vdd / 1000.0;
-		actprePower[i] = ((double)actpreEnergy[i] / (double)(cyclesElapsed)) * Vdd / 1000.0;
-		averagePower[i] = ((backgroundEnergy[i] + burstEnergy[i] + refreshEnergy[i] + actpreEnergy[i]) / (double)cyclesElapsed) * Vdd / 1000.0;
+		backgroundPower[r] = ((double)backgroundEnergy[r] / (double)(cyclesElapsed)) * Vdd / 1000.0;
+		burstPower[r] = ((double)burstEnergy[r] / (double)(cyclesElapsed)) * Vdd / 1000.0;
+		refreshPower[r] = ((double) refreshEnergy[r] / (double)(cyclesElapsed)) * Vdd / 1000.0;
+		actprePower[r] = ((double)actpreEnergy[r] / (double)(cyclesElapsed)) * Vdd / 1000.0;
+		averagePower[r] = ((backgroundEnergy[r] + burstEnergy[r] + refreshEnergy[r] + actpreEnergy[r]) / (double)cyclesElapsed) * Vdd / 1000.0;
 
 		if ((*parentMemorySystem->ReportPower)!=NULL)
 		{
-			(*parentMemorySystem->ReportPower)(backgroundPower[i],burstPower[i],refreshPower[i],actprePower[i]);
+			(*parentMemorySystem->ReportPower)(backgroundPower[r],burstPower[r],refreshPower[r],actprePower[r]);
 		}
 
-		PRINT( " == Power Data for Rank        " << i );
-		PRINT( "   Average Power (watts)     : " << averagePower[i] );
-		PRINT( "     -Background (watts)     : " << backgroundPower[i] );
-		PRINT( "     -Act/Pre    (watts)     : " << actprePower[i] );
-		PRINT( "     -Burst      (watts)     : " << burstPower[i]);
-		PRINT( "     -Refresh    (watts)     : " << refreshPower[i] );
+		PRINT( " == Power Data for Rank        " << r );
+		PRINT( "   Average Power (watts)     : " << averagePower[r] );
+		PRINT( "     -Background (watts)     : " << backgroundPower[r] );
+		PRINT( "     -Act/Pre    (watts)     : " << actprePower[r] );
+		PRINT( "     -Burst      (watts)     : " << burstPower[r]);
+		PRINT( "     -Refresh    (watts)     : " << refreshPower[r] );
+
 		if (VIS_FILE_OUTPUT)
 		{
 			// write the vis file output
-			(*visDataOut) << "bgp_"<<i<<"="<<backgroundPower[i]<<",";
-			(*visDataOut) << "ap_"<<i<<"="<<actprePower[i]<<",";
-			(*visDataOut) << "bp_"<<i<<"="<<burstPower[i]<<",";
-			(*visDataOut) << "rp_"<<i<<"="<<refreshPower[i]<<",";
-			for (size_t j=0; j<NUM_BANKS; j++)
+			csvOut << CSVWriter::IndexedName("Background_Power",myChannel,r) <<backgroundPower[r];
+			csvOut << CSVWriter::IndexedName("ACT_PRE_Power",myChannel,r) << actprePower[r];
+			csvOut << CSVWriter::IndexedName("Burst_Power",myChannel,r) << burstPower[r];
+			csvOut << CSVWriter::IndexedName("Refresh_Power",myChannel,r) << refreshPower[r];
+			double totalRankBandwidth=0.0;
+			for (size_t b=0; b<NUM_BANKS; b++)
 			{
-				(*visDataOut) << "b_" <<i<<"_"<<j<<"="<<bandwidth[SEQUENTIAL(i,j)]<<",";
-				(*visDataOut) << "l_" <<i<<"_"<<j<<"="<<averageLatency[SEQUENTIAL(i,j)]<<",";
+				csvOut << CSVWriter::IndexedName("Bandwidth",myChannel,r,b) << bandwidth[SEQUENTIAL(r,b)];
+				totalRankBandwidth += bandwidth[SEQUENTIAL(r,b)];
+				totalAggregateBandwidth += bandwidth[SEQUENTIAL(r,b)];
+				csvOut << CSVWriter::IndexedName("Average_Latency",myChannel,r,b) << averageLatency[SEQUENTIAL(r,b)];
 			}
+			csvOut << CSVWriter::IndexedName("Rank_Aggregate_Bandwidth",myChannel,r) << totalRankBandwidth; 
+			csvOut << CSVWriter::IndexedName("Rank_Average_Bandwidth",myChannel,r) << totalRankBandwidth/NUM_RANKS; 
 		}
 	}
 	if (VIS_FILE_OUTPUT)
 	{
-		(*visDataOut) <<endl;
+		csvOut << CSVWriter::IndexedName("Aggregate_Bandwidth",myChannel) << totalAggregateBandwidth;
+		csvOut << CSVWriter::IndexedName("Average_Bandwidth",myChannel) << totalAggregateBandwidth / (NUM_RANKS*NUM_BANKS);
+		csvOut.finalize(); 
 	}
 
 	// only print the latency histogram at the end of the simulation since it clogs the output too much to print every epoch
@@ -1108,14 +909,16 @@ void MemoryController::printStats(bool finalStats)
 				(*visDataOut) << it->first <<"="<< it->second << endl;
 			}
 		}
-
-		PRINT( " --- Grand Total Bank usage list");
-		for (size_t i=0;i<NUM_RANKS;i++)
+		if (currentClockCycle % EPOCH_LENGTH == 0)
 		{
-			PRINT("Rank "<<i<<":"); 
-			for (size_t j=0;j<NUM_BANKS;j++)
+			PRINT( " --- Grand Total Bank usage list");
+			for (size_t i=0;i<NUM_RANKS;i++)
 			{
-				PRINT( "  b"<<j<<": "<<grandTotalBankAccesses[SEQUENTIAL(i,j)]);
+				PRINT("Rank "<<i<<":"); 
+				for (size_t j=0;j<NUM_BANKS;j++)
+				{
+					PRINT( "  b"<<j<<": "<<grandTotalBankAccesses[SEQUENTIAL(i,j)]);
+				}
 			}
 		}
 
