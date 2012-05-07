@@ -119,7 +119,7 @@ namespace DRAMSim {
 
 			virtual ~IndexedName()
 			{
-				delete str; 
+				free(str); 
 			}
 
 		};
